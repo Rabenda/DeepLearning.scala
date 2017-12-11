@@ -9,6 +9,7 @@ import com.thoughtworks.feature.Factory
 import com.thoughtworks.feature.mixins.ImplicitsSingleton
 import org.lwjgl.opencl.CLCapabilities
 import com.thoughtworks.deeplearning.DeepLearning.Tape
+import com.thoughtworks.each.Monadic.monadic
 
 import scalaz.syntax.all._
 import com.thoughtworks.raii.asynchronous._
@@ -46,7 +47,7 @@ final class DeviceBufferLayersSpec extends AsyncFreeSpec /* AsyncFeatureSpec wit
 
   private def configure =
     Do.monadicCloseable(Factory[
-      DeviceBufferOf with FloatLayers with OpenCLBufferLiterals with FloatTraining with ImplicitsSingleton with OpenCL.UseFirstDevice with OpenCL.UseFirstPlatform with OpenCL.CommandQueuePool with DeviceBufferWeights with FloatDeviceBufferWeights with DeviceBufferLayers with FloatDeviceBufferLayers]
+      Logging with DeviceBufferOf with FloatLayers with OpenCLBufferLiterals with FloatTraining with ImplicitsSingleton with OpenCL.UseFirstDevice with OpenCL.UseFirstPlatform with OpenCL.CommandQueuePool with DeviceBufferWeights with FloatDeviceBufferWeights with DeviceBufferLayers with FloatDeviceBufferLayers]
       .newInstance(
         handleOpenCLNotification = handleOpenCLNotification,
         numberOfCommandQueuesForDevice = { (deviceId: Long, capabilities: CLCapabilities) =>
@@ -315,6 +316,47 @@ final class DeviceBufferLayersSpec extends AsyncFreeSpec /* AsyncFeatureSpec wit
       .run
       .toScalaFuture
 
+  }
+
+  "fix ? backward pass of matrix multiplication and left can train" in {
+    configure
+      .flatMap { hyperparameters0 =>
+        val hyperparameters = hyperparameters0
+        import hyperparameters._
+        import hyperparameters.implicits._
+        info("Given I have a 3x3 matrix of (0f, 1f, 2f, 4f, 7f, 10f, 13f, 15f, 17f) and a 3x1 matrix of (3f, 13f, 19f)")
+
+        val weight: Do[FloatDeviceBufferWeight] = deviceBufferOf(0f, 1f, 2f, 4f, 7f, 10f, 13f, 15f, 17f).map {
+          expectedAnswers: DeviceBuffer[Float] =>
+            FloatDeviceBufferWeight(expectedAnswers)
+        }
+        deviceBufferOf(3f, 13f, 19f)
+          .flatMap { trainingQuestions =>
+            weight.flatMap { weights =>
+              info("When I ask to matrixMultiply two matrix")
+              val matrixCalculate =
+                hyperparameters.matrixMultiply(weights /*left*/, trainingQuestions, 3).forward
+              matrixCalculate
+                .intransitiveFlatMap { tape =>
+                  val backwardBuffer = deviceBufferOf(3f, 13f, 19f)
+                  Do.garbageCollected(tape.backward(backwardBuffer))
+                }
+                .flatMap { _: Unit =>
+                  info("Then I should have a 3x3 matrix of (-9f, -38f, -55f, -35f, -162f, -237f, -44f, -232f, -344f)")
+                  weights.data.toHostBuffer.map { buffer =>
+                    val expected = Seq(-9f, -38f, -55f, -35f, -162f, -237f, -44f, -232f, -344f)
+
+                    0.until(buffer.capacity).map(buffer.get) should be(expected)
+
+                  }
+                }
+
+            }
+
+          }
+      }
+      .run
+      .toScalaFuture
   }
 
 }

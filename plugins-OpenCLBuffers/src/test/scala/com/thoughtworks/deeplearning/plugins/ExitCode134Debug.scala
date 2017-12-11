@@ -4,9 +4,11 @@ import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 
-import com.thoughtworks.compute.OpenCL.DeviceBuffer
 import com.thoughtworks.compute.{Memory, OpenCL}
+import com.thoughtworks.continuation.{ParallelContinuation, UnitContinuation}
 import com.thoughtworks.deeplearning.DeepLearning
+import com.thoughtworks.deeplearning.DeepLearning.Tape
+import com.thoughtworks.deeplearning.plugins.Layers.ToLayer
 import com.thoughtworks.feature.Factory
 import com.thoughtworks.feature.mixins.ImplicitsSingleton
 import com.thoughtworks.future._
@@ -18,19 +20,18 @@ import scalaz.syntax.all._
 import com.thoughtworks.each.Monadic.monadic
 import com.thoughtworks.each.Monadic._
 import com.thoughtworks.future._
+import shapeless.Witness
 
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 import scalaz.std.stream._
 import scala.concurrent.ExecutionContext
+import scalaz.Tags.Parallel
+import scalaz.{Apply, Semigroup, Tags}
 
-// INDArray -> OpenCLBuffer
-object FloatWeightSpec {
-//  trait NormalDistributionRandom extends OpenCL {
-//    def randn[Element](length: Int)(implicit memory: Memory[Element]): Do[DeviceBuffer[Element]] = ???
-//  }
+object ExitCode134Debug {
 
-  private[FloatWeightSpec] trait DeviceBufferOf extends OpenCL {
+  private[ExitCode134Debug] trait DeviceBufferOf extends OpenCL {
     def deviceBufferOf[Element](elements: Element*)(implicit memory: Memory[Element]): Do[DeviceBuffer[Element]] = {
       val hostBuffer: memory.HostBuffer = memory.allocate(elements.length)
       // TODO: optimize the performance
@@ -42,19 +43,19 @@ object FloatWeightSpec {
   }
 
   def main(args: Array[String]): Unit = {
-    new FloatWeightSpec().test.run.blockingAwait
+    new ExitCode134Debug().test.run.blockingAwait
   }
 
   implicit val executionContext = ExecutionContext.fromExecutor(Executors.newSingleThreadExecutor())
 }
-final class FloatWeightSpec {
 
-  import FloatWeightSpec._
+class ExitCode134Debug {
+  import ExitCode134Debug._
+
+  // Workaround for https://github.com/milessabin/shapeless/issues/755
+  implicit private def witnessThis: Witness.Aux[this.type] = Witness.mkWitness(this)
 
   def test: Do[Stream[Float]] = {
-
-    import scala.util.Random
-    val random = new Random()
 
     val handleOpenCLNotification = { (errorInfo: String, buffer: ByteBuffer) =>
       if (buffer.remaining > 0) {
@@ -79,19 +80,22 @@ final class FloatWeightSpec {
 
     doHyperparameters.flatMap { hyperparameters0 =>
       val hyperparameters = hyperparameters0
+      import hyperparameters._
       import hyperparameters.implicits._
-      import hyperparameters.DeviceBufferWeight
-      import hyperparameters.DeviceBuffer
-      import hyperparameters.DeviceBufferLayer
-      import hyperparameters.FloatDeviceBufferWeight
-      import hyperparameters.FloatDeviceBufferLayer
-      import hyperparameters.deviceBufferOf
-
       def randn(length: Int)(implicit memory: Memory[Float]): Do[DeviceBuffer[Float]] = {
-        val randomSeq = (0 until length).map(_ => 1000000f /*_ => random.nextFloat()*/ )
-        deviceBufferOf[Float](randomSeq: _*)
+//        val randomSeq = (0 until length).map(_ => 1000f /*_ => random.nextFloat()*/ )
+        deviceBufferOf[Float](
+	        0.0f,
+	        0.0f,
+	        0.0f,
+	        0.0f,
+	        0.0f,
+	        0.0f,
+	        0.0f,
+	        0.0f,
+	        0.0f
+        )
       }
-
 
       val initialValueOfRobotWeights: Do[DeviceBuffer[Float]] = randn(3)
 
@@ -99,37 +103,29 @@ final class FloatWeightSpec {
         val robotWeight: FloatDeviceBufferWeight = FloatDeviceBufferWeight(initialValueOfRobotWeight)
 
         deviceBufferOf(0f, 1f, 2f, 4f, 7f, 10f, 13f, 15f, 17f).flatMap { trainingQuestions =>
-          deviceBufferOf(3f, 13f, 19f).flatMap { expectedAnswers =>
-            def iqTestRobot(questions: hyperparameters.DeviceBuffer[Float]): FloatDeviceBufferLayer = {
-              hyperparameters.matrixMultiply(questions, robotWeight, 3) //3 is matrix0Columns
-            }
-
-            def squareLoss(questions: DeviceBuffer[Float],
-                           expectAnswer: DeviceBuffer[Float]): hyperparameters.FloatLayer = {
-              val difference = hyperparameters.subtract(expectAnswer, expectAnswer)
-              hyperparameters.logger.info(s"difference=$difference")
-              val loss = hyperparameters.multiply(difference, difference)
-              hyperparameters.logger.info(s"difference=$loss")
-              val meanValue= hyperparameters.mean(difference)
-              hyperparameters.logger.info(s"difference=$meanValue")
-              meanValue
-            }
-
-            val TotalIterations = 500
-
-            @monadic[Future]
-            def train: Future[Stream[Float]] = {
-              for (iteration <- (0 until TotalIterations).toStream) yield {
-                val loss = squareLoss(trainingQuestions, expectedAnswers).train.each
-                hyperparameters.logger.info(s"iteration=$iteration loss=$loss")
-                loss
-              }
-            }
-
-            Do.garbageCollected(train)
+          def squareLoss(questions: DeviceBuffer[Float]): FloatLayer = {
+            val iqValue = matrixMultiply(questions, robotWeight, 3) //3 is matrix0Column
+            val meanValue = mean(iqValue)
+            println(s"difference=$meanValue")
+            meanValue
           }
+
+          val TotalIterations = 500
+
+          @monadic[Future]
+          def train: Future[Stream[Float]] = {
+            for (iteration <- (0 until TotalIterations).toStream) yield {
+              val loss = squareLoss(trainingQuestions).train.each
+              println(s"iteration=$iteration loss=$loss")
+              loss
+            }
+          }
+
+          Do.garbageCollected(train)
         }
       }
+
     }
   }
+
 }

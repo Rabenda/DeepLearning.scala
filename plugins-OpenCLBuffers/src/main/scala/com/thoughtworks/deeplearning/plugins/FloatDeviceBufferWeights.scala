@@ -69,24 +69,38 @@ trait FloatDeviceBufferWeights extends DeviceBufferWeights with Weights {
             )))
 
       val delta = optimizer.delta
-      subtractInplace(data, delta)
-
+      println(s"delta length = ${delta.length} data length = ${data.length}")
+//      synchronized {
+//        subtractInplace(data, delta)
+//      }
+      Do.now(())
     }
 
   }
 
   def subtractInplace(input0: DeviceBuffer[Float], input1: DeviceBuffer[Float]): Do[Unit] = {
-    Do.monadicCloseable(subtractInplaceProgram.createFirstKernel())
-      .flatMap { kernel =>
-        kernel(0) = input0
-        kernel(1) = input1
-        val length = input0.length
-        val doEvent: Do[Event] = kernel.enqueue(length)
-        doEvent.flatMap { event =>
-          val doWait: Do[Unit] = Do.garbageCollected(event.waitForComplete())
-          doWait
-        }
+
+    if (input0.length != input1.length) {
+      throw new IllegalArgumentException("The length of data0 should equal the length of data1")
+    }
+    input0.toHostBuffer.intransitiveMap(Memory.FloatMemory.toArray).flatMap { array0 =>
+      println(array0.toSeq)
+      input1.toHostBuffer.intransitiveMap(Memory.FloatMemory.toArray).flatMap { array1 =>
+        println(array1.toSeq)
+
+        Do.monadicCloseable(subtractInplaceProgram.createFirstKernel())
+          .flatMap { kernel =>
+            kernel(0) = input0
+            kernel(1) = input1
+            val length = input0.length
+            val doEvent: Do[Event] = kernel.enqueue(length)
+            doEvent.flatMap { event =>
+              val doWait: Do[Unit] = Do.garbageCollected(event.waitForComplete())
+              doWait
+            }
+          }
       }
+    }
   }
 
   type FloatDeviceBufferWeight <: DeviceBufferWeight with FloatDeviceBufferWeightApi
@@ -129,7 +143,7 @@ trait FloatDeviceBufferWeights extends DeviceBufferWeights with Weights {
   private lazy val subtractInplaceProgram: Program = {
     val program = createProgramWithSource(
       Seq("""
-        kernel void subtract_inplace(global float* restrict input0, global const float* restrict input1) {
+        kernel void subtract_inplace(global float* /*restrict*/ input0, global const float* /*restrict*/ input1) {
           const size_t index = get_global_id(0);
           input0[index] -= input1[index];
         }

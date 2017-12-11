@@ -65,31 +65,37 @@ trait FloatDeviceBufferLayers extends DeviceBufferLayers with FloatLayers {
     val forward: Do[Tape[Float, Float]] = operand0Forward.flatMap {
       case (Tape(data0, backward0)) =>
         def outputData(data: DeviceBuffer[Float]): Do[Float] = {
-          data.toHostBuffer.map { databuffer =>
-            val elements: Array[Float] = memory.toArray(databuffer)
-            elements.sum / elements.length
+          data.toHostBuffer.intransitiveMap(memory.toArray).flatMap { array0 =>
+            println(array0)
+            data.toHostBuffer.map { databuffer =>
+              val elements: Array[Float] = memory.toArray(databuffer)
+              elements.sum / elements.length
+            }
           }
         }
         def backward(doOutputDelta: Do[Float]): UnitContinuation[Unit] = {
-          val delta0: Do[DeviceBuffer[Float]] = doOutputDelta.flatMap { outputDelta =>
-            val length = data0.length
-            allocateBuffer[Float](length).flatMap { output =>
-              Do.monadicCloseable(fillValue.createFirstKernel())
-                .flatMap { kernel =>
-                  kernel(0) = output
-                  kernel(1) = outputDelta / length
-                  val self: this.type = this
-                  val doEvent: Do[Event] = kernel.enqueue(length)(Witness(self))
-                  doEvent.flatMap { event =>
-                    val doWait: Do[Unit] = Do.garbageCollected(event.waitForComplete())
-                    doWait
+          val delta0: Do[DeviceBuffer[Float]] =
+            doOutputDelta.flatMap { outputDelta =>
+              println("mean backward delta0")
+              println(outputDelta)
+              val length = data0.length
+              allocateBuffer[Float](length).flatMap { output =>
+                Do.monadicCloseable(fillValue.createFirstKernel())
+                  .flatMap { kernel =>
+                    kernel(0) = output
+                    kernel(1) = outputDelta / length
+                    val doEvent: Do[Event] = kernel.enqueue(length)
+                    doEvent.flatMap { event =>
+                      val doWait: Do[Unit] = Do.garbageCollected(event.waitForComplete())
+                      doWait
+                    }
                   }
-                }
-                .intransitiveMap { _: Unit =>
-                  output
-                }
+                  .intransitiveMap { _: Unit =>
+                    output
+                  }
+              }
+
             }
-          }
 
           backward0(delta0)
         }
